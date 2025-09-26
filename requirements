@@ -1,7 +1,7 @@
 streamlit
 pandas
 requests
-psycopg2-binary
+psycopg2
 folium
 geopy
 streamlit-folium
