@@ -1,0 +1,141 @@
+import streamlit as st
+import requests
+import psycopg2
+import math
+import folium
+from geopy.geocoders import Nominatim
+from streamlit_folium import st_folium
+
+OSRM_URL = "http://router.project-osrm.org/route/v1/driving/"
+
+geolocator = Nominatim(user_agent="taxi_fare_app")
+
+def get_coords_from_address(address):
+    try:
+        location = geolocator.geocode(address)
+        if location:
+            return (location.latitude, location.longitude)
+        return None
+    except:
+        return None
+def save_to_db(user_name, fare, duration, distance, pickup_coords, dropoff_coords):
+    conn = None
+    try:
+        conn = psycopg2.connect(
+            host="localhost",
+            port=5432,
+            database="farsense_db",
+            user="postgres",
+            password="hardiik123"
+        )
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO trip_records 
+               (user_name, pickup_lat, pickup_lon, dropoff_lat, dropoff_lon, 
+                predicted_fare, predicted_duration_minutes, distance_km) 
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+            (user_name,
+             pickup_coords[0], pickup_coords[1],
+             dropoff_coords[0], dropoff_coords[1],
+             fare, duration, distance)
+        )
+        conn.commit()
+        cur.close()
+    except Exception as error:
+        st.error(f"Database error: {error}")
+    finally:
+        if conn is not None:
+            conn.close()
+
+st.title("FareSense: Smart Route & Fare Estimation")
+st.markdown("### Find the estimated fare, shortest route, and travel time for your trip.")
+st.markdown("---")
+user_name = st.text_input("Enter Your Name:")
+if not user_name:
+    st.warning("Please enter your name to continue.")
+    st.stop()
+st.markdown("#### Option 1: Enter pickup and drop-off addresses manually")
+pickup_address = st.text_input("Pickup Location:")
+dropoff_address = st.text_input("Drop-off Location:")
+
+st.markdown("---")
+
+st.markdown("#### Option 2: Or, select locations on the map")
+st.write("Click on the map to set your pickup and drop-off points.")
+
+if 'pickup_coords' not in st.session_state:
+    st.session_state['pickup_coords'] = None
+if 'dropoff_coords' not in st.session_state:
+    st.session_state['dropoff_coords'] = None
+
+m = folium.Map(location=[20.5937, 78.9629], zoom_start=5)
+
+if st.session_state['pickup_coords']:
+    folium.Marker(st.session_state['pickup_coords'], tooltip="Pickup").add_to(m)
+if st.session_state['dropoff_coords']:
+    folium.Marker(st.session_state['dropoff_coords'], tooltip="Drop-off").add_to(m)
+
+map_data = st_folium(m, width=700, height=500)
+
+if map_data and map_data.get("last_clicked"):
+    lat = map_data["last_clicked"]["lat"]
+    lon = map_data["last_clicked"]["lng"]
+    
+    if st.session_state['pickup_coords'] is None:
+        st.session_state['pickup_coords'] = [lat, lon]
+        st.info(f"Pickup location set: {lat:.4f}, {lon:.4f}")
+    elif st.session_state['dropoff_coords'] is None:
+        st.session_state['dropoff_coords'] = [lat, lon]
+        st.info(f"Drop-off location set: {lat:.4f}, {lon:.4f}")
+
+if st.button("Predict"):
+
+    if pickup_address and dropoff_address:
+        pickup_coords = get_coords_from_address(pickup_address)
+        dropoff_coords = get_coords_from_address(dropoff_address)
+        if not pickup_coords or not dropoff_coords:
+            st.warning("Could not find coordinates for one or both addresses.")
+            st.stop()
+    elif st.session_state['pickup_coords'] and st.session_state['dropoff_coords']:
+        pickup_coords = st.session_state['pickup_coords']
+        dropoff_coords = st.session_state['dropoff_coords']
+    else:
+        st.warning("Please enter or select both pickup and drop-off locations.")
+        st.stop()
+
+    try:
+        response = requests.get(
+            f"{OSRM_URL}{pickup_coords[1]},{pickup_coords[0]};{dropoff_coords[1]},{dropoff_coords[0]}?overview=false"
+        )
+        data = response.json()
+        if data['code'] != 'Ok':
+            st.warning("Could not find a driving route.")
+            st.stop()
+
+        trip_distance_km = data['routes'][0]['distance'] / 1000
+        predicted_trip_duration = data['routes'][0]['duration'] / 60
+
+    
+        avg_speed = (trip_distance_km / predicted_trip_duration) * 60 if predicted_trip_duration > 0 else 0
+        if avg_speed < 15:
+            traffic = 'Very High'
+        elif avg_speed < 30:
+            traffic = 'High'
+        elif avg_speed < 50:
+            traffic = 'Medium'
+        else:
+            traffic = 'Low'
+
+    except Exception as e:
+        st.error(f"Error fetching route: {e}")
+        st.stop()
+
+    BASE_FARE = 10.0
+    FARE_PER_KM = 12.0
+    predicted_fare = BASE_FARE + (trip_distance_km * FARE_PER_KM)
+    save_to_db(user_name, predicted_fare, predicted_trip_duration, trip_distance_km, pickup_coords, dropoff_coords)
+    st.success("### Prediction Completed!")
+    st.metric("Estimated Fare", f"₹{predicted_fare:.2f}")
+    st.metric("Estimated Trip Duration", f"{math.ceil(predicted_trip_duration)} minutes")
+    st.metric("Distance", f"{trip_distance_km:.2f} km")
+    st.info(f"Traffic conditions: {traffic}")

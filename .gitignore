@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+.venv/
+env/
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data and secrets
+data/raw/
+.kaggle/
+kaggle.json
+.env
+
+# VS Code
+.vscode/
+
+# Models
+models/
