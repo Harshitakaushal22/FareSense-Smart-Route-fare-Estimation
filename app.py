@@ -1,3 +1,4 @@
+from xml.parsers.expat import model
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,6 +8,11 @@ import folium
 from geopy.geocoders import Nominatim
 from streamlit_folium import st_folium
 import math
+from datetime import datetime
+import joblib
+
+# Load your trained Random Forest model
+rf_model = joblib.load("rf_model.pkl")  # Make sure this file exists in your repo
 
 def get_connection():
     return psycopg2.connect(
@@ -28,14 +34,7 @@ def save_to_db(user_name, fare, duration, distance, pickup_location, dropoff_loc
              predicted_fare, predicted_duration_minutes, distance_km)
             VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (
-                user_name,
-                pickup_location,
-                dropoff_location,
-                fare,
-                duration,
-                distance
-            )
+            (user_name, pickup_location, dropoff_location, fare, duration, distance)
         )
         conn.commit()
         cur.close()
@@ -58,6 +57,7 @@ def fetch_trip_history():
     except Exception as error:
         st.error(f"Error fetching history: {error}")
         return pd.DataFrame()
+
 OSRM_URL = "http://router.project-osrm.org/route/v1/driving/"
 geolocator = Nominatim(user_agent="taxi_fare_app")
 
@@ -83,7 +83,6 @@ if menu == "Predict Fare":
 
     pickup_location = st.text_input("Pickup Location:")
     dropoff_location = st.text_input("Drop-off Location:")
-
     st.markdown("---")
     st.markdown("#### Or, select locations on the map")
     st.write("Click on the map to set your pickup and drop-off points.")
@@ -122,14 +121,13 @@ if menu == "Predict Fare":
         elif st.session_state['pickup_coords'] and st.session_state['dropoff_coords']:
             pickup_coords = st.session_state['pickup_coords']
             dropoff_coords = st.session_state['dropoff_coords']
-            # For map clicks, we still want readable names
+            
             pickup_location = f"Lat: {pickup_coords[0]:.4f}, Lon: {pickup_coords[1]:.4f}"
             dropoff_location = f"Lat: {dropoff_coords[0]:.4f}, Lon: {dropoff_coords[1]:.4f}"
         else:
             st.warning("Please enter or select both pickup and drop-off locations.")
             st.stop()
 
-        # OSRM API request
         try:
             response = requests.get(
                 f"{OSRM_URL}{pickup_coords[1]},{pickup_coords[0]};{dropoff_coords[1]},{dropoff_coords[0]}?overview=false"
@@ -154,13 +152,34 @@ if menu == "Predict Fare":
         except Exception as e:
             st.error(f"Error fetching route: {e}")
             st.stop()
+
+        # Predict fare using Random Forest
+        features = [[trip_distance_km, predicted_trip_duration]]
+        predicted_fare = rf_model.predict(features)[0]
+
+        # Time and Day adjustments
+        current_hour = datetime.now().hour
+        current_day = datetime.now().weekday()  # 0=Mon, 6=Sun
+        adjusted_fare = predicted_fare
+
+        # Weekend discount
+        if current_day >= 5:
+            adjusted_fare -= 4.0
+        # Morning (6-10) & Evening (17-20) -> higher fare
+        if 6 <= current_hour <= 10 or 17 <= current_hour <= 20:
+            adjusted_fare += 5.0
+        else:  # Afternoon & Night -> lower fare
+            adjusted_fare -= 2.0
+
         BASE_FARE = 10.0
-        FARE_PER_KM = 12.0
-        predicted_fare = BASE_FARE + (trip_distance_km * FARE_PER_KM)
-        save_to_db(user_name, predicted_fare, predicted_trip_duration, trip_distance_km,
+        adjusted_fare = max(BASE_FARE, adjusted_fare)
+
+        # Save to DB
+        save_to_db(user_name, adjusted_fare, predicted_trip_duration, trip_distance_km,
                    pickup_location, dropoff_location)
+
         st.success("### ✅ Prediction Completed!")
-        st.metric("Estimated Fare", f"₹{predicted_fare:.2f}")
+        st.metric("Estimated Fare", f"₹{adjusted_fare:.2f}")
         st.metric("Estimated Trip Duration", f"{math.ceil(predicted_trip_duration)} minutes")
         st.metric("Distance", f"{trip_distance_km:.2f} km")
         st.info(f"Traffic conditions: {traffic}")
