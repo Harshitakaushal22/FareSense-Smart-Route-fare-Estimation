@@ -1,15 +1,13 @@
 import streamlit as st
-import psycopg2
 import pandas as pd
+import numpy as np
+import psycopg2
 import requests
 import folium
 from geopy.geocoders import Nominatim
 from streamlit_folium import st_folium
 import math
 
-# ------------------------
-# PostgreSQL Connection (Neon DB)
-# ------------------------
 def get_connection():
     return psycopg2.connect(
         host="ep-spring-rice-adodtb8d-pooler.c-2.us-east-1.aws.neon.tech",
@@ -19,9 +17,6 @@ def get_connection():
         password="npg_LgHaiw70kCNc"
     )
 
-# ------------------------
-# Save Trip to Database
-# ------------------------
 def save_to_db(user_name, fare, duration, distance, pickup_location, dropoff_location):
     try:
         conn = get_connection()
@@ -48,9 +43,6 @@ def save_to_db(user_name, fare, duration, distance, pickup_location, dropoff_loc
     except Exception as error:
         st.error(f"Database error: {error}")
 
-# ------------------------
-# Fetch Trip History
-# ------------------------
 def fetch_trip_history():
     try:
         conn = get_connection()
@@ -66,10 +58,6 @@ def fetch_trip_history():
     except Exception as error:
         st.error(f"Error fetching history: {error}")
         return pd.DataFrame()
-
-# ------------------------
-# OSRM API & Geolocator
-# ------------------------
 OSRM_URL = "http://router.project-osrm.org/route/v1/driving/"
 geolocator = Nominatim(user_agent="taxi_fare_app")
 
@@ -82,9 +70,6 @@ def get_coords_from_address(address):
     except:
         return None
 
-# ------------------------
-# Streamlit UI
-# ------------------------
 st.title("🚖 FareSense: Smart Route & Fare Estimation")
 st.markdown("### Get estimated fare, shortest route, and travel time for your trip.")
 
@@ -169,17 +154,11 @@ if menu == "Predict Fare":
         except Exception as e:
             st.error(f"Error fetching route: {e}")
             st.stop()
-
-        # Fare calculation
         BASE_FARE = 10.0
         FARE_PER_KM = 12.0
         predicted_fare = BASE_FARE + (trip_distance_km * FARE_PER_KM)
-
-        # Save trip to DB with readable locations
         save_to_db(user_name, predicted_fare, predicted_trip_duration, trip_distance_km,
                    pickup_location, dropoff_location)
-
-        # Display results
         st.success("### ✅ Prediction Completed!")
         st.metric("Estimated Fare", f"₹{predicted_fare:.2f}")
         st.metric("Estimated Trip Duration", f"{math.ceil(predicted_trip_duration)} minutes")
